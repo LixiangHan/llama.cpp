@@ -10763,6 +10763,7 @@ GGML_CALL bool ggml_cuda_compute_forward(struct ggml_compute_params * params, st
         case GGML_OP_CONT:
             func = ggml_cuda_dup;
             break;
+        case GGML_OP_TIMING:
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:
@@ -11485,6 +11486,13 @@ GGML_CALL static bool ggml_backend_cuda_graph_compute(ggml_backend_t backend, gg
             continue;
         }
 
+        // TODO: Synchronize?
+        if (node->op == GGML_OP_TIMING) {
+            ggml_backend_cuda_synchronize(backend);
+            node->timestamp = ggml_time_us();
+            continue;
+        }
+
 #ifndef NDEBUG
         assert(node->backend == GGML_BACKEND_GPU || node->backend == GGML_BACKEND_GPU_SPLIT);
         assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
@@ -11598,6 +11606,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 ggml_type src0_type = op->src[0]->type;
                 return src0_type != GGML_TYPE_I32 && src0_type != GGML_TYPE_I16;
             } break;
+        case GGML_OP_TIMING:
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:

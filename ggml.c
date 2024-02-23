@@ -1794,9 +1794,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
 
     "CROSS_ENTROPY_LOSS",
     "CROSS_ENTROPY_LOSS_BACK",
+
+    "TIMING",
 };
 
-static_assert(GGML_OP_COUNT == 72, "GGML_OP_COUNT != 72");
+static_assert(GGML_OP_COUNT == 73, "GGML_OP_COUNT != 73");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1880,9 +1882,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
     "cross_entropy_loss(x,y)",
     "cross_entropy_loss_back(x,y)",
+
+    "timing(x)",
 };
 
-static_assert(GGML_OP_COUNT == 72, "GGML_OP_COUNT != 72");
+static_assert(GGML_OP_COUNT == 73, "GGML_OP_COUNT != 73");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -2734,6 +2738,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
         /*.padding      =*/ { 0 },
+        /*.timestamp    =*/ 0,
     };
 
     // TODO: this should not be needed as long as we don't rely on aligned SIMD loads
@@ -3336,6 +3341,26 @@ struct ggml_tensor * ggml_get_tensor(struct ggml_context * ctx, const char * nam
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+
+// ggml_timing
+
+static struct ggml_tensor * ggml_timing_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a) {
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+
+    result->op          = GGML_OP_TIMING;
+    result->grad        = NULL;
+    result->src[0]      = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_timing(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a) {
+    return ggml_timing_impl(ctx, a);
+}
 
 // ggml_dup
 
@@ -15365,6 +15390,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
                 ggml_compute_forward_cross_entropy_loss_back(params, tensor->src[0], tensor->src[1], tensor->src[2], tensor);
             }
             break;
+        case GGML_OP_TIMING:
+            {
+                GGML_ASSERT(false);
+            }
+            break;
         case GGML_OP_NONE:
             {
                 // nop
@@ -16435,6 +16465,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
             {
                 GGML_ASSERT(false); // not supported
+            } break;
+        case GGML_OP_TIMING:
+            {
+                GGML_ASSERT(false);
             } break;
         case GGML_OP_NONE:
             {
