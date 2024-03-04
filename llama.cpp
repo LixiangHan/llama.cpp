@@ -13475,6 +13475,13 @@ void llama_set_timestamp(struct llama_context * ctx, const char * name) {
     ctx->timestamps.data[ss.str()] = 0;
 }
 
+int64_t llama_get_timestamp(struct llama_context * ctx, const char * name) {
+    const llama_timestamps timestamps = llama_get_timestamps(ctx);
+    std::stringstream ss;
+    ss << "timing-" << name;
+    return timestamps.data.at(ss.str());
+}
+
 struct llama_timestamps llama_get_timestamps(struct llama_context * ctx) {
     struct llama_timestamps result;
     for (auto it = ctx->timestamps.data.begin(); it != ctx->timestamps.data.end(); it++) {

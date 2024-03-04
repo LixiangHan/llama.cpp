@@ -978,6 +978,8 @@ extern "C" {
     LLAMA_API void llama_dump_timing_info_yaml(FILE * stream, const struct llama_context * ctx);
 
     LLAMA_API void llama_set_timestamp(struct llama_context * ctx, const char * name);
+    
+    LLAMA_API int64_t llama_get_timestamp(struct llama_context * ctx, const char * name);
 
     LLAMA_API struct llama_timestamps llama_get_timestamps(struct llama_context * ctx);
 
