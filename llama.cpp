@@ -1937,6 +1937,7 @@ struct llama_context {
     int64_t t_eval_us   = 0;
 
     struct llama_timestamps timestamps;
+    struct ggml_context * ctx0; // for hacking llm_build_cb
 
     int32_t n_sample = 0; // number of tokens sampled
     int32_t n_p_eval = 0; // number of tokens in eval calls for the prompt (with batch size > 1)
@@ -4660,7 +4661,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 // llm_build
 //
 
-using llm_build_cb = std::function<void(struct ggml_tensor * cur, const char * name, int nl)>;
+using llm_build_cb = std::function<void(struct ggml_tensor *& cur, const char * name, int nl)>;
 
 enum llm_ffn_op_type {
     LLM_FFN_SILU,
@@ -5002,7 +5003,7 @@ static struct ggml_tensor * llm_build_kv(
 
 struct llm_build_context {
     const llama_model    & model;
-    const llama_context  & lctx;
+    llama_context        & lctx;
     const llama_hparams  & hparams;
     const llama_cparams  & cparams;
     const llama_batch    & batch;
@@ -5095,6 +5096,7 @@ struct llm_build_context {
         };
 
         ctx0 = ggml_init(params);
+        lctx.ctx0 = ctx0;
     }
 
     void free() {
@@ -5196,10 +5198,10 @@ struct llm_build_context {
         cb(KQ_mask, "KQ_mask", -1);
 
         for (int il = 0; il < n_layer; ++il) {
-            if (cparams.enable_timing && il == (n_layer - 1)) {
-                inpL = ggml_timing(ctx0, inpL);
-                cb(inpL, "Timing-Begin", -1);
-            }
+            // if (cparams.enable_timing && il == (n_layer - 1)) {
+            //     inpL = ggml_timing(ctx0, inpL);
+            //     cb(inpL, "Timing-Begin", -1);
+            // }
 
             struct ggml_tensor * inpSA = inpL;
 
@@ -5247,10 +5249,10 @@ struct llm_build_context {
                 );
                 cb(Kcur, "Kcur", il);
 
-                if (cparams.enable_timing && il == (n_layer - 1)) {
-                    Kcur = ggml_timing(ctx0, Kcur);
-                    cb(Kcur, "Timing-Attn", -1);
-                }
+                // if (cparams.enable_timing && il == (n_layer - 1)) {
+                //     Kcur = ggml_timing(ctx0, Kcur);
+                //     cb(Kcur, "Timing-Attn", -1);
+                // }
 
                 cur = llm_build_kv(ctx0, model, hparams, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
@@ -5258,10 +5260,10 @@ struct llm_build_context {
                 cb(cur, "kqv_out", il);
             }
 
-            if (cparams.enable_timing && il == (n_layer - 1)) {
-                cur = ggml_timing(ctx0, cur);
-                cb(cur, "Timing-FFN", -1);
-            }
+            // if (cparams.enable_timing && il == (n_layer - 1)) {
+            //     cur = ggml_timing(ctx0, cur);
+            //     cb(cur, "Timing-FFN", -1);
+            // }
 
             struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
             cb(ffn_inp, "ffn_inp", il);
@@ -5348,10 +5350,10 @@ struct llm_build_context {
             cur = ggml_add(ctx0, cur, ffn_inp);
             cb(cur, "l_out", il);
 
-            if (cparams.enable_timing && il == (n_layer - 1)) {
-                cur = ggml_timing(ctx0, cur);
-                cb(cur, "Timing-End", -1);
-            }
+            // if (cparams.enable_timing && il == (n_layer - 1)) {
+            //     cur = ggml_timing(ctx0, cur);
+            //     cb(cur, "Timing-End", -1);
+            // }
 
             // input for next layer
             inpL = cur;
@@ -7629,7 +7631,7 @@ static struct ggml_cgraph * llama_build_graph(
     const auto & model = lctx.model;
 
     // this callback allows us to apply custom logic to each tensor (e.g. ggml-alloc, offloading, etc.)
-    llm_build_cb cb = [&](struct ggml_tensor * cur, const char * name, int il) {
+    llm_build_cb cb = [&](struct ggml_tensor *& cur, const char * name, int il) {
         if (il >= 0) {
             ggml_format_name(cur, "%s-%d", name, il);
         } else {
@@ -7643,23 +7645,23 @@ static struct ggml_cgraph * llama_build_graph(
             }
         }
 
-        // if (lctx.cparams.enable_timing) {
-        //     std::stringstream ss;
-        //     if (il >= 0) {
-        //         ss << name << "-" << il;
-        //     }
-        //     else {
-        //         ss << name;
-        //     }
-        //     std::string nname = ss.str();
-        //     for (auto it = lctx.timestamps.data.begin(); it != lctx.timestamps.data.end; it++) {
-        //         if (it->first.substr(7) == nname) { // after "Timing-""
-        //             cur = ggml_timing(lctx, cur);
-        //             ggml_set_name(cur, it->first.c_str());
-        //             break;
-        //         }
-        //     }
-        // }
+        if (lctx.cparams.enable_timing) {
+            std::stringstream ss;
+            if (il >= 0) {
+                ss << name << "-" << il;
+            }
+            else {
+                ss << name;
+            }
+            std::string nname = ss.str();
+            for (auto it = lctx.timestamps.data.begin(); it != lctx.timestamps.data.end(); it++) {
+                if (it->first.substr(7) == nname) { // after "timing-""
+                    cur = ggml_timing(lctx.ctx0, cur);
+                    ggml_set_name(cur, it->first.c_str());
+                    break;
+                }
+            }
+        }
     };
 
     struct ggml_cgraph * result = NULL;
@@ -8153,12 +8155,14 @@ static int llama_decode_internal(
         lctx.t_load_us = ggml_time_us() - lctx.t_start_us;
         lctx.has_evaluated_once = true;
     }
-
+    
     if (lctx.cparams.enable_timing) {
         for (int i = 0; i < gf->n_nodes; i++) {
             struct ggml_tensor * node = gf->nodes[i];
-            if (0 == strncmp(node->name, "Timing", 6)) {
-                lctx.timestamps.data[node->name] = node->timestamp;
+            for (auto it = lctx.timestamps.data.begin(); it != lctx.timestamps.data.end(); it++) {
+                if (0 == strcmp(node->name, it->first.c_str())) {
+                    lctx.timestamps.data[node->name] = node->timestamp;
+                }
             }
         }
     }
@@ -13466,7 +13470,9 @@ static void llama_log_callback_default(ggml_log_level level, const char * text, 
 }
 
 void llama_set_timestamp(struct llama_context * ctx, const char * name) {
-
+    std::stringstream ss;
+    ss << "timing-" << name;
+    ctx->timestamps.data[ss.str()] = 0;
 }
 
 struct llama_timestamps llama_get_timestamps(struct llama_context * ctx) {
