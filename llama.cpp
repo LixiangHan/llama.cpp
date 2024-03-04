@@ -1646,6 +1646,8 @@ struct llama_cparams {
     bool mul_mat_q;
     bool offload_kqv;
     bool do_pooling;
+    
+    bool enable_timing;
 
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
@@ -1890,6 +1892,10 @@ struct llama_model {
     }
 };
 
+struct llama_timestamps {
+    std::unordered_map<std::string, int64_t> data;
+};
+
 struct llama_context {
     llama_context(const llama_model & model) : model(model), t_start_us(model.t_start_us), t_load_us(model.t_load_us) {}
     ~llama_context() {
@@ -1929,6 +1935,8 @@ struct llama_context {
     int64_t t_sample_us = 0;
     int64_t t_p_eval_us = 0;
     int64_t t_eval_us   = 0;
+
+    struct llama_timestamps timestamps;
 
     int32_t n_sample = 0; // number of tokens sampled
     int32_t n_p_eval = 0; // number of tokens in eval calls for the prompt (with batch size > 1)
@@ -5188,6 +5196,11 @@ struct llm_build_context {
         cb(KQ_mask, "KQ_mask", -1);
 
         for (int il = 0; il < n_layer; ++il) {
+            if (cparams.enable_timing && il == (n_layer - 1)) {
+                inpL = ggml_timing(ctx0, inpL);
+                cb(inpL, "Timing-Begin", -1);
+            }
+
             struct ggml_tensor * inpSA = inpL;
 
             // norm
@@ -5234,10 +5247,20 @@ struct llm_build_context {
                 );
                 cb(Kcur, "Kcur", il);
 
+                if (cparams.enable_timing && il == (n_layer - 1)) {
+                    Kcur = ggml_timing(ctx0, Kcur);
+                    cb(Kcur, "Timing-Attn", -1);
+                }
+
                 cur = llm_build_kv(ctx0, model, hparams, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
                         Kcur, Vcur, Qcur, KQ_mask, nullptr, n_ctx, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
                 cb(cur, "kqv_out", il);
+            }
+
+            if (cparams.enable_timing && il == (n_layer - 1)) {
+                cur = ggml_timing(ctx0, cur);
+                cb(cur, "Timing-FFN", -1);
             }
 
             struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
@@ -5324,6 +5347,11 @@ struct llm_build_context {
 
             cur = ggml_add(ctx0, cur, ffn_inp);
             cb(cur, "l_out", il);
+
+            if (cparams.enable_timing && il == (n_layer - 1)) {
+                cur = ggml_timing(ctx0, cur);
+                cb(cur, "Timing-End", -1);
+            }
 
             // input for next layer
             inpL = cur;
@@ -7614,6 +7642,24 @@ static struct ggml_cgraph * llama_build_graph(
                 ggml_backend_sched_set_node_backend(lctx.sched, cur, lctx.backend_cpu);
             }
         }
+
+        // if (lctx.cparams.enable_timing) {
+        //     std::stringstream ss;
+        //     if (il >= 0) {
+        //         ss << name << "-" << il;
+        //     }
+        //     else {
+        //         ss << name;
+        //     }
+        //     std::string nname = ss.str();
+        //     for (auto it = lctx.timestamps.data.begin(); it != lctx.timestamps.data.end; it++) {
+        //         if (it->first.substr(7) == nname) { // after "Timing-""
+        //             cur = ggml_timing(lctx, cur);
+        //             ggml_set_name(cur, it->first.c_str());
+        //             break;
+        //         }
+        //     }
+        // }
     };
 
     struct ggml_cgraph * result = NULL;
@@ -8106,6 +8152,15 @@ static int llama_decode_internal(
     if (!lctx.has_evaluated_once) {
         lctx.t_load_us = ggml_time_us() - lctx.t_start_us;
         lctx.has_evaluated_once = true;
+    }
+
+    if (lctx.cparams.enable_timing) {
+        for (int i = 0; i < gf->n_nodes; i++) {
+            struct ggml_tensor * node = gf->nodes[i];
+            if (0 == strncmp(node->name, "Timing", 6)) {
+                lctx.timestamps.data[node->name] = node->timestamp;
+            }
+        }
     }
 
     return 0;
@@ -11723,6 +11778,7 @@ struct llama_context_params llama_context_default_params() {
         /*.embedding                   =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.do_pooling                  =*/ true,
+        /*.enable_timing               =*/ false,
     };
 
     return result;
@@ -11882,6 +11938,8 @@ struct llama_context * llama_new_context_with_model(
     cparams.mul_mat_q        = params.mul_mat_q;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.do_pooling       = params.do_pooling;
+
+    cparams.enable_timing    = params.enable_timing;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
     cparams.rope_freq_base   = params.rope_freq_base  == 0.0f ? hparams.rope_freq_base_train  : params.rope_freq_base;
@@ -13405,4 +13463,26 @@ static void llama_log_callback_default(ggml_log_level level, const char * text, 
     (void) user_data;
     fputs(text, stderr);
     fflush(stderr);
+}
+
+void llama_set_timestamp(struct llama_context * ctx, const char * name) {
+
+}
+
+struct llama_timestamps llama_get_timestamps(struct llama_context * ctx) {
+    struct llama_timestamps result;
+    for (auto it = ctx->timestamps.data.begin(); it != ctx->timestamps.data.end(); it++) {
+        result.data[it->first] = it->second;
+    }
+    return result;
+}
+
+void llama_print_timestamps(struct llama_context * ctx) {
+    const llama_timestamps timestamps = llama_get_timestamps(ctx);
+
+    LLAMA_LOG_INFO("\n++++++++++++++++++++++++++++++++++++++++\n");
+    for (auto it = timestamps.data.begin(); it != timestamps.data.end(); it++) {
+        LLAMA_LOG_INFO("%s:     %-20s: %ld us\n", __func__, it->first.c_str(), it->second);
+    }
+    LLAMA_LOG_INFO("++++++++++++++++++++++++++++++++++++++++\n");
 }

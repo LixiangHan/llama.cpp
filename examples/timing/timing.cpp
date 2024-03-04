@@ -10,24 +10,15 @@ int main(int argc, char ** argv) {
     gpt_params params;
 
     if (argc == 1 || argv[1][0] == '-') {
-        printf("usage: %s MODEL_PATH [PROMPT]\n" , argv[0]);
+        printf("usage: %s MODEL_PATH [PROMPT] [N-PREDICT]\n" , argv[0]);
         return 1 ;
     }
 
-    if (argc >= 2) {
-        params.model = argv[1];
-    }
+    params.model = argv[1];
 
-    if (argc >= 3) {
-        params.prompt = argv[2];
-    }
+    params.prompt = argv[2];
 
-    if (params.prompt.empty()) {
-        params.prompt = "Hello my name is";
-    }
-
-    // total length of the sequence including the prompt
-    const int n_len = 32;
+    const int n_pred = atoi(argv[3]);
 
     // init LLM
 
@@ -51,6 +42,8 @@ int main(int argc, char ** argv) {
 
     llama_context_params ctx_params = llama_context_default_params();
 
+    ctx_params.enable_timing = true;
+
     ctx_params.seed  = 1234;
     ctx_params.n_ctx = 2048;
     ctx_params.n_threads = params.n_threads;
@@ -63,15 +56,21 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    llama_set_timestamp(ctx, "l_out-0");
+    llama_set_timestamp(ctx, "Kcur-1");
+    llama_set_timestamp(ctx, "kqv_out-1");
+    llama_set_timestamp(ctx, "l_out-1");
+
     // tokenize the prompt
 
     std::vector<llama_token> tokens_list;
     tokens_list = ::llama_tokenize(ctx, params.prompt, true);
 
     const int n_ctx    = llama_n_ctx(ctx);
+    const int n_len    = tokens_list.size() + n_pred;
     const int n_kv_req = tokens_list.size() + (n_len - tokens_list.size());
 
-    LOG_TEE("\n%s: n_len = %d, n_ctx = %d, n_kv_req = %d\n", __func__, n_len, n_ctx, n_kv_req);
+    LOG_TEE("\n%s: n_pred = %d, n_ctx = %d, n_kv_req = %d\n", __func__, n_pred, n_ctx, n_kv_req);
 
     // make sure the KV cache is big enough to hold all the prompt and generated tokens
     if (n_kv_req > n_ctx) {
@@ -107,6 +106,8 @@ int main(int argc, char ** argv) {
         LOG_TEE("%s: llama_decode() failed\n", __func__);
         return 1;
     }
+    
+    llama_print_timestamps(ctx);
 
     // main loop
 
@@ -162,6 +163,8 @@ int main(int argc, char ** argv) {
     }
 
     LOG_TEE("\n");
+
+    llama_print_timestamps(ctx);
 
     const auto t_main_end = ggml_time_us();
 

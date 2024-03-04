@@ -53,6 +53,7 @@ extern "C" {
 
     struct llama_model;
     struct llama_context;
+    struct llama_timestamps;
 
     typedef int32_t llama_pos;
     typedef int32_t llama_token;
@@ -260,6 +261,8 @@ extern "C" {
         bool embedding;   // embedding mode only
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool do_pooling;  // whether to pool (sum) embedding results by sequence id (ignored if no pooling layer)
+
+        bool enable_timing;   // enable timing op
     };
 
     // model quantization parameters
@@ -973,6 +976,12 @@ extern "C" {
     LLAMA_API void llama_log_set(ggml_log_callback log_callback, void * user_data);
 
     LLAMA_API void llama_dump_timing_info_yaml(FILE * stream, const struct llama_context * ctx);
+
+    LLAMA_API void llama_set_timestamp(struct llama_context * ctx, const char * name);
+
+    LLAMA_API struct llama_timestamps llama_get_timestamps(struct llama_context * ctx);
+
+    LLAMA_API void llama_print_timestamps(struct llama_context * ctx);
 
 #ifdef __cplusplus
 }
